@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/kaorimatz/prometheus-influxdb-adapter/castrate"
 	"io"
 	"io/ioutil"
 	"math"
@@ -178,6 +179,9 @@ var (
 		},
 		[]string{"handler"},
 	)
+
+	//tags limit
+	tagsList = map[string]bool{"region": true, "kubernetes_cluster_name": true, "host": true, "container": true, "pod_name": true, "name": true, "resource_id": true, "vm_id": true, "disk_id": true, "interface": true}
 )
 
 type fieldValue struct {
@@ -915,13 +919,32 @@ func (w *writer) writeRequestToPoints(req *prompb.WriteRequest) ([]*influx.Point
 	receivedSamples.Add(float64(n))
 
 	for _, ts := range req.Timeseries {
-		var name string
-		tags := make(map[string]string, len(ts.Labels)-1)
+		var name, metricField string
+		//tags := make(map[string]string, len(ts.Labels)-1)
+		tags := make(map[string]string)
+		fields := make(map[string]interface{})
 		for _, l := range ts.Labels {
 			if l.Name == model.MetricNameLabel {
-				name = l.Value
+				if l.Value == "" {
+					continue
+				}
+				//name = l.Value
+				name, metricField = castrate.CastrateMetricName(l.Value)
+				if name == "" {
+					continue
+				}
+				if metricField != "" {
+					fields[metricField] = 0
+				}
 			} else {
-				tags[l.Name] = l.Value
+				// todo  organize tags field
+				_, hasOk := tagsList[l.Name]
+				if hasOk {
+					tags[l.Name] = l.Value
+				} else {
+					fields[l.Name] = l.Value
+				}
+				//tags[l.Name] = l.Value
 			}
 		}
 
@@ -932,7 +955,14 @@ func (w *writer) writeRequestToPoints(req *prompb.WriteRequest) ([]*influx.Point
 			}
 
 			t := time.Unix(0, s.Timestamp*int64(time.Millisecond))
-			fields := map[string]interface{}{w.config.influxdbField: s.Value}
+			//fields := map[string]interface{}{w.config.influxdbField: s.Value}
+			if metricField != "" {
+				fields[metricField] = s.Value
+			} else {
+				if metricField != "" {
+					fields[w.config.influxdbField] = s.Value
+				}
+			}
 			p, err := influx.NewPoint(name, tags, fields, t)
 			if err != nil {
 				return nil, err
